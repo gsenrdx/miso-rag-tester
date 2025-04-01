@@ -16,12 +16,36 @@ st.set_page_config(
     layout="wide"
 )
 
+# .env 파일에서 환경 변수 로드
+env_path = os.path.join(os.path.dirname(__file__), '.env')
+# 로컬 개발 환경에서는 .env 파일 사용, 배포 환경에서는 Streamlit secrets 사용
+if os.path.exists(env_path):
+    load_dotenv(env_path)
+    
+    # API 정보
+    API_URL = os.getenv("MISO_API_URL")
+    API_KEY = os.getenv("MISO_API_KEY")
+    GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
+else:
+    # Streamlit Cloud에서 실행 중인 경우 secrets 사용
+    API_URL = st.secrets.get("MISO_API_URL")
+    API_KEY = st.secrets.get("MISO_API_KEY")
+    GOOGLE_SHEET_ID = st.secrets.get("GOOGLE_SHEET_ID")
+
 # 구글 시트 설정
 def setup_google_sheets():
     try:
         scope = ['https://spreadsheets.google.com/feeds',
                 'https://www.googleapis.com/auth/drive']
-        credentials = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
+        
+        # 로컬 개발 환경에서는 credentials.json 파일 사용
+        if os.path.exists('credentials.json'):
+            credentials = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
+        else:
+            # Streamlit Cloud에서는 secrets에서 자격 증명 정보 가져오기
+            gcp_creds = st.secrets.get("gcp_service_account", {})
+            credentials = ServiceAccountCredentials.from_json_keyfile_dict(gcp_creds, scope)
+            
         gc = gspread.authorize(credentials)
         return gc
     except Exception as e:
@@ -31,7 +55,8 @@ def setup_google_sheets():
 def load_query_history(gc):
     """구글 시트에서 질문 히스토리를 로드하는 함수"""
     try:
-        spreadsheet_id = os.getenv("GOOGLE_SHEET_ID")
+        # 로컬 또는 Streamlit Cloud 환경에 맞게 Google Sheet ID 가져오기
+        spreadsheet_id = GOOGLE_SHEET_ID
         if not spreadsheet_id:
             st.error("구글 시트 ID가 설정되지 않았습니다.")
             return []
@@ -65,7 +90,7 @@ def load_query_history(gc):
 def save_feedback_to_sheet(gc, feedback_data):
     try:
         # 스프레드시트 열기 (스프레드시트 ID를 환경 변수에서 가져옴)
-        spreadsheet_id = os.getenv("GOOGLE_SHEET_ID")
+        spreadsheet_id = GOOGLE_SHEET_ID
         if not spreadsheet_id:
             st.error("구글 시트 ID가 설정되지 않았습니다.")
             return False
@@ -208,14 +233,6 @@ def submit_feedback(user_name, feedback_data, response_data):
     finally:
         # 로딩 상태 해제
         st.session_state.is_submitting = False
-
-# .env 파일에서 환경 변수 로드
-env_path = os.path.join(os.path.dirname(__file__), '.env')
-load_dotenv(env_path)
-
-# API 정보
-API_URL = os.getenv("MISO_API_URL")
-API_KEY = os.getenv("MISO_API_KEY")
 
 # 세션 상태 초기화
 if 'selected_documents' not in st.session_state:
