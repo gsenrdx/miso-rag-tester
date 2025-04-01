@@ -30,12 +30,40 @@ streamlit run app.py
 
 ## 환경 설정
 
+### 로컬 개발 환경
+
 `.env` 파일을 생성하고 다음 정보를 입력하세요:
 
 ```
 MISO_API_URL=your_api_url
 MISO_API_KEY=your_api_key
 GOOGLE_SHEET_ID=your_google_sheet_id
+```
+
+### Streamlit Cloud 배포 환경
+
+Streamlit Cloud에 배포할 경우, 다음과 같이 설정하세요:
+
+1. [Streamlit Cloud](https://share.streamlit.io/)에 로그인
+2. 새로운 앱 배포를 선택하고 GitHub 저장소 연결
+3. 앱 설정에서 "Secrets" 섹션에 환경 변수 설정:
+
+```toml
+MISO_API_URL = "your_api_url"
+MISO_API_KEY = "your_api_key"
+GOOGLE_SHEET_ID = "your_google_sheet_id"
+
+[gcp_service_account]
+type = "service_account"
+project_id = "your-project-id"
+private_key_id = "your-private-key-id"
+private_key = "your-private-key"
+client_email = "your-service-account-email"
+client_id = "your-client-id"
+auth_uri = "https://accounts.google.com/o/oauth2/auth"
+token_uri = "https://oauth2.googleapis.com/token"
+auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
+client_x509_cert_url = "your-cert-url"
 ```
 
 ## Google 스프레드시트 설정
