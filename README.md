@@ -14,7 +14,7 @@
 
 ```bash
 # 저장소 복제
-git clone https://github.com/yourusername/miso-rag-tester.git
+git clone https://github.com/gsenrdx/miso-rag-tester.git
 cd miso-rag-tester
 
 # 가상환경 생성 및 활성화
@@ -46,4 +46,4 @@ GOOGLE_SHEET_ID=your_google_sheet_id
 
 ## 문의
 
-최정규 주임 (Kyle) 
+최정규 주임 (Kyle)
