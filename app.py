@@ -344,205 +344,217 @@ if st.button("Data 검색", type="primary", key="search_button"):
             try:
                 # API 호출
                 response = requests.post(API_URL, headers=headers, json=payload)
-                response_data = response.json()
                 
-                # 검색 결과 저장
-                st.session_state.search_results = response_data
-                st.session_state.current_query = query
-                
-                # 결과 표시
-                st.subheader("검색 결과")
-                
-                # 탭 생성
-                tab1, tab2 = st.tabs(["응답 내용", "전체 응답 데이터"])
-                
-                with tab1:
-                    if response_data.get("data", {}).get("outputs", {}).get("output"):
-                        outputs = response_data["data"]["outputs"]["output"]
+                # 응답 상태 코드 확인
+                if response.status_code == 200 and response.text.strip():
+                    try:
+                        response_data = response.json()
                         
-                        # hyde_query 표시 추가
-                        hyde_query = response_data.get("data", {}).get("outputs", {}).get("hyde_query")
-                        if hyde_query:
-                            with st.expander("🔍 변환된 검색 query (가상문서)", expanded=False):
+                        # 검색 결과 저장
+                        st.session_state.search_results = response_data
+                        st.session_state.current_query = query
+                        
+                        # 결과 표시
+                        st.subheader("검색 결과")
+                        
+                        # 탭 생성
+                        tab1, tab2 = st.tabs(["응답 내용", "전체 응답 데이터"])
+                        
+                        with tab1:
+                            if response_data.get("data", {}).get("outputs", {}).get("output"):
+                                outputs = response_data["data"]["outputs"]["output"]
+                                
+                                # hyde_query 표시 추가
+                                hyde_query = response_data.get("data", {}).get("outputs", {}).get("hyde_query")
+                                if hyde_query:
+                                    with st.expander("🔍 변환된 검색 query (가상문서)", expanded=False):
+                                        st.markdown("""
+                                            <div style='background-color: #f8f9fa; padding: 1rem; border-radius: 0.25rem; margin-bottom: 1rem;'>
+                                                <p style='color: #666; margin: 0;'>이 쿼리는 답변과 상관없는 검색을 위한 가상문서입니다.</p>
+                                            </div>
+                                        """, unsafe_allow_html=True)
+                                        st.markdown(f"""
+                                            <div style='background-color: #f0f0f0; padding: 1rem; border-radius: 0.25rem; 
+                                                white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word; 
+                                                font-family: monospace;'>
+                                                {hyde_query}
+                                            </div>
+                                        """, unsafe_allow_html=True)
+                                    st.divider()
+                                
+                                # 결과 요약
+                                st.markdown(f"총 {len(outputs)}개의 관련 문서를 찾았습니다.")
                                 st.markdown("""
-                                    <div style='background-color: #f8f9fa; padding: 1rem; border-radius: 0.25rem; margin-bottom: 1rem;'>
-                                        <p style='color: #666; margin: 0;'>이 쿼리는 답변과 상관없는 검색을 위한 가상문서입니다.</p>
+                                    <div style='background-color: #e8f4ff; padding: 1rem; border-radius: 0.25rem; margin-bottom: 1rem;'>
+                                        <p style='margin: 0; color: #0066cc;'>2. 질문과 관련된 문서를 선택해주세요.</p>
                                     </div>
                                 """, unsafe_allow_html=True)
-                                st.markdown(f"""
-                                    <div style='background-color: #f0f0f0; padding: 1rem; border-radius: 0.25rem; 
-                                        white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word; 
-                                        font-family: monospace;'>
-                                        {hyde_query}
+                                
+                                # 결과 데이터 준비
+                                results_data = []
+                                for output in outputs:
+                                    content = output.get('content', '')
+                                    metadata = output.get('metadata', {})
+                                    score = metadata.get('score', 0)
+                                    dataset_name = metadata.get('dataset_name', 'N/A')
+                                    
+                                    content_parts = content.split(';')
+                                    chapter = next((part.split(':')[1] for part in content_parts if '장번호' in part), 'N/A')
+                                    article = next((part.split(':')[1] for part in content_parts if '조번호' in part), 'N/A')
+                                    title_part = next((part.split(':')[1] for part in content_parts if '조제목' in part), '')
+                                    title = 'null' if not title_part or title_part.strip().lower() == 'nan' else title_part.strip()
+                                    
+                                    # 내용에서 장제목 부분 제거
+                                    content_without_title = ';'.join([part for part in content_parts if '조제목' not in part])
+                                    
+                                    # 특수 케이스 처리 - 복잡한 데이터 패턴 감지
+                                    is_complex_format = False
+                                    chapter_title = next((part.split(':')[1] for part in content_parts if '장제목' in part), '')
+                                    
+                                    # 복잡한 데이터 구조 감지 조건들
+                                    if any(pattern in article for pattern in ['|', '---------', '표']) or len(article) > 30:
+                                        is_complex_format = True
+                                    if article and article[0] == '|':  # 표 형식으로 시작하는 조번호
+                                        is_complex_format = True
+                                    
+                                    if is_complex_format:
+                                        # 간략한 제목으로 대체
+                                        display_chapter = f"{chapter}"
+                                        if chapter_title:
+                                            display_chapter = f"{chapter} - {chapter_title}"
+                                        if len(display_chapter) > 25:
+                                            display_chapter = display_chapter[:22] + "..."
+                                        article = ''  # 조번호 비우기
+                                    else:
+                                        display_chapter = chapter
+                                    
+                                    results_data.append({
+                                        'dataset_name': dataset_name,
+                                        'chapter': chapter,
+                                        'display_chapter': display_chapter,
+                                        'article': article,
+                                        'title': title,
+                                        'score': score,
+                                        'content': content_without_title,
+                                        'is_complex_format': is_complex_format
+                                    })
+                                
+                                # 점수 기준으로 정렬 (높은 순)
+                                results_data.sort(key=lambda x: x['score'], reverse=True)
+                                
+                                # 데이터셋별로 결과 그룹화
+                                for dataset_name in set(item['dataset_name'] for item in results_data):
+                                    st.subheader(f"📚 {dataset_name}")
+                                    
+                                    # 해당 데이터셋의 결과만 필터링
+                                    dataset_results = [item for item in results_data if item['dataset_name'] == dataset_name]
+                                    
+                                    # 결과 표시
+                                    for idx, result in enumerate(dataset_results, 1):
+                                        # rank와 total_docs 추가
+                                        result['rank'] = idx
+                                        result['total_docs'] = len(dataset_results)
+                                        
+                                        # 문서 선택 체크박스
+                                        doc_id = f"{dataset_name}_{result['chapter']}_{result['article']}"
+                                        
+                                        # 제목 형식 설정
+                                        if result.get('is_complex_format', False):
+                                            display_title = f"📄 {result['display_chapter']} (관련도: {result['score']:.4f}, 순위: {idx}/{len(dataset_results)})"
+                                        elif result['title'] == 'null':
+                                            display_title = f"📄 {result['chapter']} - {result['article']} (관련도: {result['score']:.4f}, 순위: {idx}/{len(dataset_results)})"
+                                        else:
+                                            # 제목 길이 제한
+                                            title = result['title']
+                                            if len(title) > 20:
+                                                title = title[:17] + "..."
+                                            display_title = f"📄 {result['chapter']} - {result['article']} {title} (관련도: {result['score']:.4f}, 순위: {idx}/{len(dataset_results)})"
+                                        
+                                        is_selected = st.checkbox(
+                                            display_title,
+                                            key=f"doc_{doc_id}",
+                                            value=doc_id in st.session_state.selected_documents
+                                        )
+                                        
+                                        if is_selected:
+                                            st.session_state.selected_documents.add(doc_id)
+                                        else:
+                                            st.session_state.selected_documents.discard(doc_id)
+                                        
+                                        # 아코디언 생성
+                                        with st.expander("문서 내용 보기", expanded=False):
+                                            st.markdown(f"""
+                                                <div style='padding: 0.5rem; background-color: #f8f9fa; border-radius: 0.25rem;'>
+                                                    <p style='margin: 0;'>{result['content']}</p>
+                                                </div>
+                                            """, unsafe_allow_html=True)
+                                    
+                                    st.divider()
+                                
+                                # 피드백 섹션
+                                st.markdown("""
+                                    <div style='background-color: #e8f4ff; padding: 1rem; border-radius: 0.25rem; margin-bottom: 1rem;'>
+                                        <p style='margin: 0; color: #0066cc;'>3. 평가 및 코멘트를 입력 후 피드백 제출 버튼을 눌러주세요.</p>
                                     </div>
                                 """, unsafe_allow_html=True)
-                            st.divider()
-                        
-                        # 결과 요약
-                        st.markdown(f"총 {len(outputs)}개의 관련 문서를 찾았습니다.")
-                        st.markdown("""
-                            <div style='background-color: #e8f4ff; padding: 1rem; border-radius: 0.25rem; margin-bottom: 1rem;'>
-                                <p style='margin: 0; color: #0066cc;'>2. 질문과 관련된 문서를 선택해주세요.</p>
-                            </div>
-                        """, unsafe_allow_html=True)
-                        
-                        # 결과 데이터 준비
-                        results_data = []
-                        for output in outputs:
-                            content = output.get('content', '')
-                            metadata = output.get('metadata', {})
-                            score = metadata.get('score', 0)
-                            dataset_name = metadata.get('dataset_name', 'N/A')
-                            
-                            content_parts = content.split(';')
-                            chapter = next((part.split(':')[1] for part in content_parts if '장번호' in part), 'N/A')
-                            article = next((part.split(':')[1] for part in content_parts if '조번호' in part), 'N/A')
-                            title_part = next((part.split(':')[1] for part in content_parts if '조제목' in part), '')
-                            title = 'null' if not title_part or title_part.strip().lower() == 'nan' else title_part.strip()
-                            
-                            # 내용에서 장제목 부분 제거
-                            content_without_title = ';'.join([part for part in content_parts if '조제목' not in part])
-                            
-                            # 특수 케이스 처리 - 복잡한 데이터 패턴 감지
-                            is_complex_format = False
-                            chapter_title = next((part.split(':')[1] for part in content_parts if '장제목' in part), '')
-                            
-                            # 복잡한 데이터 구조 감지 조건들
-                            if any(pattern in article for pattern in ['|', '---------', '표']) or len(article) > 30:
-                                is_complex_format = True
-                            if article and article[0] == '|':  # 표 형식으로 시작하는 조번호
-                                is_complex_format = True
-                            
-                            if is_complex_format:
-                                # 간략한 제목으로 대체
-                                display_chapter = f"{chapter}"
-                                if chapter_title:
-                                    display_chapter = f"{chapter} - {chapter_title}"
-                                if len(display_chapter) > 25:
-                                    display_chapter = display_chapter[:22] + "..."
-                                article = ''  # 조번호 비우기
+                                col1, col2 = st.columns([1, 2])
+                                
+                                with col1:
+                                    st.session_state.feedback_rating = st.radio(
+                                        "검색 결과 품질 평가",
+                                        ["A", "B", "C"],
+                                        index=None,
+                                        horizontal=True
+                                    )
+                                
+                                with col2:
+                                    st.session_state.feedback_comment = st.text_area(
+                                        "추가 코멘트 (선택사항)",
+                                        value=st.session_state.feedback_comment,
+                                        height=100
+                                    )
+                                
+                                if st.button("피드백 제출", type="secondary"):
+                                    feedback_data = {
+                                        'user_name': user_name,
+                                        'query': st.session_state.current_query,
+                                        'rating': st.session_state.feedback_rating,
+                                        'comment': st.session_state.feedback_comment,
+                                        'selected_documents': list(st.session_state.selected_documents),
+                                        'all_outputs': response_data["data"]["outputs"]["output"]
+                                    }
+                                    
+                                    if submit_feedback(user_name, feedback_data, response_data):
+                                        # 성공적으로 저장된 경우 세션 상태 초기화
+                                        st.session_state.feedback_rating = None
+                                        st.session_state.feedback_comment = ""
+                                        st.session_state.selected_documents = set()
+                                        
+                                        # 다음 질문하기 버튼 대신 즉시 초기화
+                                        st.session_state.search_results = None
+                                        st.session_state.current_query = None
+                                        
+                                        # 히스토리 최신화
+                                        gc = setup_google_sheets()
+                                        if gc:
+                                            st.session_state.query_history = load_query_history(gc)
+                                        
+                                        # 페이지 상단으로 이동 및 새로고침 효과
+                                        st.experimental_rerun()
                             else:
-                                display_chapter = chapter
-                            
-                            results_data.append({
-                                'dataset_name': dataset_name,
-                                'chapter': chapter,
-                                'display_chapter': display_chapter,
-                                'article': article,
-                                'title': title,
-                                'score': score,
-                                'content': content_without_title,
-                                'is_complex_format': is_complex_format
-                            })
+                                st.warning("응답에서 결과를 찾을 수 없습니다.")
                         
-                        # 점수 기준으로 정렬 (높은 순)
-                        results_data.sort(key=lambda x: x['score'], reverse=True)
-                        
-                        # 데이터셋별로 결과 그룹화
-                        for dataset_name in set(item['dataset_name'] for item in results_data):
-                            st.subheader(f"📚 {dataset_name}")
-                            
-                            # 해당 데이터셋의 결과만 필터링
-                            dataset_results = [item for item in results_data if item['dataset_name'] == dataset_name]
-                            
-                            # 결과 표시
-                            for idx, result in enumerate(dataset_results, 1):
-                                # rank와 total_docs 추가
-                                result['rank'] = idx
-                                result['total_docs'] = len(dataset_results)
-                                
-                                # 문서 선택 체크박스
-                                doc_id = f"{dataset_name}_{result['chapter']}_{result['article']}"
-                                
-                                # 제목 형식 설정
-                                if result.get('is_complex_format', False):
-                                    display_title = f"📄 {result['display_chapter']} (관련도: {result['score']:.4f}, 순위: {idx}/{len(dataset_results)})"
-                                elif result['title'] == 'null':
-                                    display_title = f"📄 {result['chapter']} - {result['article']} (관련도: {result['score']:.4f}, 순위: {idx}/{len(dataset_results)})"
-                                else:
-                                    # 제목 길이 제한
-                                    title = result['title']
-                                    if len(title) > 20:
-                                        title = title[:17] + "..."
-                                    display_title = f"📄 {result['chapter']} - {result['article']} {title} (관련도: {result['score']:.4f}, 순위: {idx}/{len(dataset_results)})"
-                                
-                                is_selected = st.checkbox(
-                                    display_title,
-                                    key=f"doc_{doc_id}",
-                                    value=doc_id in st.session_state.selected_documents
-                                )
-                                
-                                if is_selected:
-                                    st.session_state.selected_documents.add(doc_id)
-                                else:
-                                    st.session_state.selected_documents.discard(doc_id)
-                                
-                                # 아코디언 생성
-                                with st.expander("문서 내용 보기", expanded=False):
-                                    st.markdown(f"""
-                                        <div style='padding: 0.5rem; background-color: #f8f9fa; border-radius: 0.25rem;'>
-                                            <p style='margin: 0;'>{result['content']}</p>
-                                        </div>
-                                    """, unsafe_allow_html=True)
-                            
-                            st.divider()
-                        
-                        # 피드백 섹션
-                        st.markdown("""
-                            <div style='background-color: #e8f4ff; padding: 1rem; border-radius: 0.25rem; margin-bottom: 1rem;'>
-                                <p style='margin: 0; color: #0066cc;'>3. 평가 및 코멘트를 입력 후 피드백 제출 버튼을 눌러주세요.</p>
-                            </div>
-                        """, unsafe_allow_html=True)
-                        col1, col2 = st.columns([1, 2])
-                        
-                        with col1:
-                            st.session_state.feedback_rating = st.radio(
-                                "검색 결과 품질 평가",
-                                ["A", "B", "C"],
-                                index=None,
-                                horizontal=True
-                            )
-                        
-                        with col2:
-                            st.session_state.feedback_comment = st.text_area(
-                                "추가 코멘트 (선택사항)",
-                                value=st.session_state.feedback_comment,
-                                height=100
-                            )
-                        
-                        if st.button("피드백 제출", type="secondary"):
-                            feedback_data = {
-                                'user_name': user_name,
-                                'query': st.session_state.current_query,
-                                'rating': st.session_state.feedback_rating,
-                                'comment': st.session_state.feedback_comment,
-                                'selected_documents': list(st.session_state.selected_documents),
-                                'all_outputs': response_data["data"]["outputs"]["output"]
-                            }
-                            
-                            if submit_feedback(user_name, feedback_data, response_data):
-                                # 성공적으로 저장된 경우 세션 상태 초기화
-                                st.session_state.feedback_rating = None
-                                st.session_state.feedback_comment = ""
-                                st.session_state.selected_documents = set()
-                                
-                                # 다음 질문하기 버튼 대신 즉시 초기화
-                                st.session_state.search_results = None
-                                st.session_state.current_query = None
-                                
-                                # 히스토리 최신화
-                                gc = setup_google_sheets()
-                                if gc:
-                                    st.session_state.query_history = load_query_history(gc)
-                                
-                                # 페이지 상단으로 이동 및 새로고침 효과
-                                st.experimental_rerun()
-                    else:
-                        st.warning("응답에서 결과를 찾을 수 없습니다.")
-                
-                with tab2:
-                    st.json(response_data)
+                        with tab2:
+                            st.json(response_data)
                     
+                    except json.JSONDecodeError as e:
+                        st.error(f"JSON 파싱 오류: {str(e)}, 응답 내용: {response.text[:200]}...")
+                else:
+                    if response.status_code != 200:
+                        st.error(f"API 호출 오류 - 상태 코드: {response.status_code}, 응답: {response.text}")
+                    else:
+                        st.error("API 응답이 비어있습니다. API 서버를 확인해주세요.")
+                        
             except Exception as e:
                 st.error(f"오류 발생: {str(e)}")
 else:
