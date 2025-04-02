@@ -248,12 +248,12 @@ if 'current_query' not in st.session_state:
 if 'is_submitting' not in st.session_state:
     st.session_state.is_submitting = False
 if 'query_history' not in st.session_state:
-    # 구글 시트에서 히스토리 로드
-    gc = setup_google_sheets()
-    if gc:
-        st.session_state.query_history = load_query_history(gc)
-    else:
-        st.session_state.query_history = []
+    st.session_state.query_history = []
+
+# 구글 시트에서 히스토리 로드
+gc = setup_google_sheets()
+if gc:
+    st.session_state.query_history = load_query_history(gc)
 
 # 타이틀 및 설명
 st.title("인사챗봇 RAG DATA 검색 평가")
@@ -272,7 +272,6 @@ with st.sidebar:
     
     # 디버깅을 위한 출력
     st.write("현재 사용자:", user_name)
-    st.write("질문 히스토리 개수:", len(st.session_state.query_history))
     
     # 질문 히스토리 표시 (사용자 이름이 있으면 항상 표시)
     st.divider()
@@ -316,6 +315,57 @@ with st.sidebar:
 
 # 메인 영역
 query = st.text_area("질문 입력", height=100)
+
+# 특수 케이스 처리 - 복잡한 데이터 패턴 감지
+def process_output(content_parts, chapter, article, title, dataset_name, score, content_without_title):
+    is_complex_format = False
+    chapter_title = next((part.split(':')[1] for part in content_parts if '장제목' in part), '')
+    
+    # FAQ 데이터 처리
+    if dataset_name == 'FAQ.csv':
+        row_id = next((part.split(':')[1].strip() for part in content_parts if 'row_id' in part), '')
+        question = next((part.split(':')[1].strip() for part in content_parts if '질문' in part), '')
+        if row_id and question:
+            display_chapter = f"{row_id} - {question}"
+            article = ''
+            is_complex_format = True
+            return {
+                'dataset_name': dataset_name,
+                'chapter': row_id,
+                'display_chapter': display_chapter,
+                'article': article,
+                'title': title,
+                'score': score,
+                'content': content_without_title,
+                'is_complex_format': is_complex_format
+            }
+    
+    # 기존 로직
+    if any(pattern in article for pattern in ['|', '---------', '표']) or len(article) > 30:
+        is_complex_format = True
+    if article and article[0] == '|':
+        is_complex_format = True
+    
+    if is_complex_format:
+        display_chapter = f"{chapter}"
+        if chapter_title:
+            display_chapter = f"{chapter} - {chapter_title}"
+        if len(display_chapter) > 25:
+            display_chapter = display_chapter[:22] + "..."
+        article = ''
+    else:
+        display_chapter = chapter
+    
+    return {
+        'dataset_name': dataset_name,
+        'chapter': chapter,
+        'display_chapter': display_chapter,
+        'article': article,
+        'title': title,
+        'score': score,
+        'content': content_without_title,
+        'is_complex_format': is_complex_format
+    }
 
 # 검색 버튼
 if st.button("Data 검색", type="primary", key="search_button"):
@@ -361,8 +411,14 @@ if st.button("Data 검색", type="primary", key="search_button"):
                         tab1, tab2 = st.tabs(["응답 내용", "전체 응답 데이터"])
                         
                         with tab1:
-                            if response_data.get("data", {}).get("outputs", {}).get("output"):
-                                outputs = response_data["data"]["outputs"]["output"]
+                            if response_data.get("data", {}).get("outputs", {}).get("output1") and \
+                               response_data.get("data", {}).get("outputs", {}).get("output2") and \
+                               response_data.get("data", {}).get("outputs", {}).get("output3"):
+                                
+                                # 리스트인 경우 모든 항목 사용
+                                output1_list = response_data["data"]["outputs"]["output1"] if isinstance(response_data["data"]["outputs"]["output1"], list) else [response_data["data"]["outputs"]["output1"]]
+                                output2_list = response_data["data"]["outputs"]["output2"] if isinstance(response_data["data"]["outputs"]["output2"], list) else [response_data["data"]["outputs"]["output2"]]
+                                output3_list = response_data["data"]["outputs"]["output3"] if isinstance(response_data["data"]["outputs"]["output3"], list) else [response_data["data"]["outputs"]["output3"]]
                                 
                                 # hyde_query 표시 추가
                                 hyde_query = response_data.get("data", {}).get("outputs", {}).get("hyde_query")
@@ -383,7 +439,8 @@ if st.button("Data 검색", type="primary", key="search_button"):
                                     st.divider()
                                 
                                 # 결과 요약
-                                st.markdown(f"총 {len(outputs)}개의 관련 문서를 찾았습니다.")
+                                total_docs = len(output1_list) + len(output2_list) + len(output3_list)
+                                st.markdown(f"총 {total_docs}개의 관련 문서를 찾았습니다.")
                                 st.markdown("""
                                     <div style='background-color: #e8f4ff; padding: 1rem; border-radius: 0.25rem; margin-bottom: 1rem;'>
                                         <p style='margin: 0; color: #0066cc;'>2. 질문과 관련된 문서를 선택해주세요.</p>
@@ -392,52 +449,60 @@ if st.button("Data 검색", type="primary", key="search_button"):
                                 
                                 # 결과 데이터 준비
                                 results_data = []
-                                for output in outputs:
-                                    content = output.get('content', '')
-                                    metadata = output.get('metadata', {})
-                                    score = metadata.get('score', 0)
-                                    dataset_name = metadata.get('dataset_name', 'N/A')
+                                
+                                # output1 처리
+                                for idx, output1 in enumerate(output1_list):
+                                    content1 = output1.get('content', '')
+                                    metadata1 = output1.get('metadata', {})
+                                    score1 = metadata1.get('score', 0)
+                                    dataset_name1 = metadata1.get('dataset_name', 'N/A')
                                     
-                                    content_parts = content.split(';')
-                                    chapter = next((part.split(':')[1] for part in content_parts if '장번호' in part), 'N/A')
-                                    article = next((part.split(':')[1] for part in content_parts if '조번호' in part), 'N/A')
-                                    title_part = next((part.split(':')[1] for part in content_parts if '조제목' in part), '')
-                                    title = 'null' if not title_part or title_part.strip().lower() == 'nan' else title_part.strip()
+                                    content_parts1 = content1.split(';')
+                                    chapter1 = next((part.split(':')[1] for part in content_parts1 if '장번호' in part), 'N/A')
+                                    article1 = next((part.split(':')[1] for part in content_parts1 if '조번호' in part), 'N/A')
+                                    title_part1 = next((part.split(':')[1] for part in content_parts1 if '조제목' in part), '')
+                                    title1 = 'null' if not title_part1 or title_part1.strip().lower() == 'nan' else title_part1.strip()
                                     
                                     # 내용에서 장제목 부분 제거
-                                    content_without_title = ';'.join([part for part in content_parts if '조제목' not in part])
+                                    content_without_title1 = ';'.join([part for part in content_parts1 if '조제목' not in part])
                                     
-                                    # 특수 케이스 처리 - 복잡한 데이터 패턴 감지
-                                    is_complex_format = False
-                                    chapter_title = next((part.split(':')[1] for part in content_parts if '장제목' in part), '')
+                                    results_data.append(process_output(content_parts1, chapter1, article1, title1, dataset_name1, score1, content_without_title1))
+                                
+                                # output2 처리
+                                for idx, output2 in enumerate(output2_list):
+                                    content2 = output2.get('content', '')
+                                    metadata2 = output2.get('metadata', {})
+                                    score2 = metadata2.get('score', 0)
+                                    dataset_name2 = metadata2.get('dataset_name', 'N/A')
                                     
-                                    # 복잡한 데이터 구조 감지 조건들
-                                    if any(pattern in article for pattern in ['|', '---------', '표']) or len(article) > 30:
-                                        is_complex_format = True
-                                    if article and article[0] == '|':  # 표 형식으로 시작하는 조번호
-                                        is_complex_format = True
+                                    content_parts2 = content2.split(';')
+                                    chapter2 = next((part.split(':')[1] for part in content_parts2 if '장번호' in part), 'N/A')
+                                    article2 = next((part.split(':')[1] for part in content_parts2 if '조번호' in part), 'N/A')
+                                    title_part2 = next((part.split(':')[1] for part in content_parts2 if '조제목' in part), '')
+                                    title2 = 'null' if not title_part2 or title_part2.strip().lower() == 'nan' else title_part2.strip()
                                     
-                                    if is_complex_format:
-                                        # 간략한 제목으로 대체
-                                        display_chapter = f"{chapter}"
-                                        if chapter_title:
-                                            display_chapter = f"{chapter} - {chapter_title}"
-                                        if len(display_chapter) > 25:
-                                            display_chapter = display_chapter[:22] + "..."
-                                        article = ''  # 조번호 비우기
-                                    else:
-                                        display_chapter = chapter
+                                    # 내용에서 장제목 부분 제거
+                                    content_without_title2 = ';'.join([part for part in content_parts2 if '조제목' not in part])
                                     
-                                    results_data.append({
-                                        'dataset_name': dataset_name,
-                                        'chapter': chapter,
-                                        'display_chapter': display_chapter,
-                                        'article': article,
-                                        'title': title,
-                                        'score': score,
-                                        'content': content_without_title,
-                                        'is_complex_format': is_complex_format
-                                    })
+                                    results_data.append(process_output(content_parts2, chapter2, article2, title2, dataset_name2, score2, content_without_title2))
+                                
+                                # output3 처리
+                                for idx, output3 in enumerate(output3_list):
+                                    content3 = output3.get('content', '')
+                                    metadata3 = output3.get('metadata', {})
+                                    score3 = metadata3.get('score', 0)
+                                    dataset_name3 = metadata3.get('dataset_name', 'N/A')
+                                    
+                                    content_parts3 = content3.split(';')
+                                    chapter3 = next((part.split(':')[1] for part in content_parts3 if '장번호' in part), 'N/A')
+                                    article3 = next((part.split(':')[1] for part in content_parts3 if '조번호' in part), 'N/A')
+                                    title_part3 = next((part.split(':')[1] for part in content_parts3 if '조제목' in part), '')
+                                    title3 = 'null' if not title_part3 or title_part3.strip().lower() == 'nan' else title_part3.strip()
+                                    
+                                    # 내용에서 장제목 부분 제거
+                                    content_without_title3 = ';'.join([part for part in content_parts3 if '조제목' not in part])
+                                    
+                                    results_data.append(process_output(content_parts3, chapter3, article3, title3, dataset_name3, score3, content_without_title3))
                                 
                                 # 점수 기준으로 정렬 (높은 순)
                                 results_data.sort(key=lambda x: x['score'], reverse=True)
@@ -451,12 +516,8 @@ if st.button("Data 검색", type="primary", key="search_button"):
                                     
                                     # 결과 표시
                                     for idx, result in enumerate(dataset_results, 1):
-                                        # rank와 total_docs 추가
-                                        result['rank'] = idx
-                                        result['total_docs'] = len(dataset_results)
-                                        
-                                        # 문서 선택 체크박스
-                                        doc_id = f"{dataset_name}_{result['chapter']}_{result['article']}"
+                                        # 문서 선택 체크박스 - 고유한 키 생성
+                                        doc_id = f"{dataset_name}_{result['chapter']}_{result['article']}_{idx}"
                                         
                                         # 제목 형식 설정
                                         if result.get('is_complex_format', False):
@@ -464,7 +525,6 @@ if st.button("Data 검색", type="primary", key="search_button"):
                                         elif result['title'] == 'null':
                                             display_title = f"📄 {result['chapter']} - {result['article']} (관련도: {result['score']:.4f}, 순위: {idx}/{len(dataset_results)})"
                                         else:
-                                            # 제목 길이 제한
                                             title = result['title']
                                             if len(title) > 20:
                                                 title = title[:17] + "..."
@@ -521,7 +581,7 @@ if st.button("Data 검색", type="primary", key="search_button"):
                                         'rating': st.session_state.feedback_rating,
                                         'comment': st.session_state.feedback_comment,
                                         'selected_documents': list(st.session_state.selected_documents),
-                                        'all_outputs': response_data["data"]["outputs"]["output"]
+                                        'all_outputs': output1_list + output2_list + output3_list
                                     }
                                     
                                     if submit_feedback(user_name, feedback_data, response_data):
@@ -569,8 +629,13 @@ else:
         tab1, tab2 = st.tabs(["응답 내용", "전체 응답 데이터"])
         
         with tab1:
-            if response_data.get("data", {}).get("outputs", {}).get("output"):
-                outputs = response_data["data"]["outputs"]["output"]
+            if response_data.get("data", {}).get("outputs", {}).get("output1") and \
+               response_data.get("data", {}).get("outputs", {}).get("output2") and \
+               response_data.get("data", {}).get("outputs", {}).get("output3"):
+                
+                output1 = response_data["data"]["outputs"]["output1"][0] if isinstance(response_data["data"]["outputs"]["output1"], list) else response_data["data"]["outputs"]["output1"]
+                output2 = response_data["data"]["outputs"]["output2"][0] if isinstance(response_data["data"]["outputs"]["output2"], list) else response_data["data"]["outputs"]["output2"]
+                output3 = response_data["data"]["outputs"]["output3"][0] if isinstance(response_data["data"]["outputs"]["output3"], list) else response_data["data"]["outputs"]["output3"]
                 
                 # hyde_query 표시 추가
                 hyde_query = response_data.get("data", {}).get("outputs", {}).get("hyde_query")
@@ -591,7 +656,7 @@ else:
                     st.divider()
                 
                 # 결과 요약
-                st.markdown(f"총 {len(outputs)}개의 관련 문서를 찾았습니다.")
+                st.markdown("총 3개의 관련 문서를 찾았습니다.")
                 st.markdown("""
                     <div style='background-color: #e8f4ff; padding: 1rem; border-radius: 0.25rem; margin-bottom: 1rem;'>
                         <p style='margin: 0; color: #0066cc;'>📌 질문과 관련된 문서를 선택해주세요.</p>
@@ -600,52 +665,52 @@ else:
                 
                 # 결과 데이터 준비
                 results_data = []
-                for output in outputs:
-                    content = output.get('content', '')
-                    metadata = output.get('metadata', {})
-                    score = metadata.get('score', 0)
-                    dataset_name = metadata.get('dataset_name', 'N/A')
-                    
-                    content_parts = content.split(';')
-                    chapter = next((part.split(':')[1] for part in content_parts if '장번호' in part), 'N/A')
-                    article = next((part.split(':')[1] for part in content_parts if '조번호' in part), 'N/A')
-                    title_part = next((part.split(':')[1] for part in content_parts if '조제목' in part), '')
-                    title = 'null' if not title_part or title_part.strip().lower() == 'nan' else title_part.strip()
-                    
-                    # 내용에서 장제목 부분 제거
-                    content_without_title = ';'.join([part for part in content_parts if '조제목' not in part])
-                    
-                    # 특수 케이스 처리 - 복잡한 데이터 패턴 감지
-                    is_complex_format = False
-                    chapter_title = next((part.split(':')[1] for part in content_parts if '장제목' in part), '')
-                    
-                    # 복잡한 데이터 구조 감지 조건들
-                    if any(pattern in article for pattern in ['|', '---------', '표']) or len(article) > 30:
-                        is_complex_format = True
-                    if article and article[0] == '|':  # 표 형식으로 시작하는 조번호
-                        is_complex_format = True
-                    
-                    if is_complex_format:
-                        # 간략한 제목으로 대체
-                        display_chapter = f"{chapter}"
-                        if chapter_title:
-                            display_chapter = f"{chapter} - {chapter_title}"
-                        if len(display_chapter) > 25:
-                            display_chapter = display_chapter[:22] + "..."
-                        article = ''  # 조번호 비우기
-                    else:
-                        display_chapter = chapter
-                    
-                    results_data.append({
-                        'dataset_name': dataset_name,
-                        'chapter': chapter,
-                        'display_chapter': display_chapter,
-                        'article': article,
-                        'title': title,
-                        'score': score,
-                        'content': content_without_title,
-                        'is_complex_format': is_complex_format
-                    })
+                
+                # output1 처리
+                content1 = output1.get('content', '')
+                metadata1 = output1.get('metadata', {})
+                score1 = metadata1.get('score', 0)
+                dataset_name1 = metadata1.get('dataset_name', 'N/A')
+                
+                content_parts1 = content1.split(';')
+                chapter1 = next((part.split(':')[1] for part in content_parts1 if '장번호' in part), 'N/A')
+                article1 = next((part.split(':')[1] for part in content_parts1 if '조번호' in part), 'N/A')
+                title_part1 = next((part.split(':')[1] for part in content_parts1 if '조제목' in part), '')
+                title1 = 'null' if not title_part1 or title_part1.strip().lower() == 'nan' else title_part1.strip()
+                
+                # output2 처리
+                content2 = output2.get('content', '')
+                metadata2 = output2.get('metadata', {})
+                score2 = metadata2.get('score', 0)
+                dataset_name2 = metadata2.get('dataset_name', 'N/A')
+                
+                content_parts2 = content2.split(';')
+                chapter2 = next((part.split(':')[1] for part in content_parts2 if '장번호' in part), 'N/A')
+                article2 = next((part.split(':')[1] for part in content_parts2 if '조번호' in part), 'N/A')
+                title_part2 = next((part.split(':')[1] for part in content_parts2 if '조제목' in part), '')
+                title2 = 'null' if not title_part2 or title_part2.strip().lower() == 'nan' else title_part2.strip()
+                
+                # output3 처리
+                content3 = output3.get('content', '')
+                metadata3 = output3.get('metadata', {})
+                score3 = metadata3.get('score', 0)
+                dataset_name3 = metadata3.get('dataset_name', 'N/A')
+                
+                content_parts3 = content3.split(';')
+                chapter3 = next((part.split(':')[1] for part in content_parts3 if '장번호' in part), 'N/A')
+                article3 = next((part.split(':')[1] for part in content_parts3 if '조번호' in part), 'N/A')
+                title_part3 = next((part.split(':')[1] for part in content_parts3 if '조제목' in part), '')
+                title3 = 'null' if not title_part3 or title_part3.strip().lower() == 'nan' else title_part3.strip()
+                
+                # 각 output의 내용에서 장제목 부분 제거
+                content_without_title1 = ';'.join([part for part in content_parts1 if '조제목' not in part])
+                content_without_title2 = ';'.join([part for part in content_parts2 if '조제목' not in part])
+                content_without_title3 = ';'.join([part for part in content_parts3 if '조제목' not in part])
+                
+                # 각 output 처리
+                results_data.append(process_output(content_parts1, chapter1, article1, title1, dataset_name1, score1, content_without_title1))
+                results_data.append(process_output(content_parts2, chapter2, article2, title2, dataset_name2, score2, content_without_title2))
+                results_data.append(process_output(content_parts3, chapter3, article3, title3, dataset_name3, score3, content_without_title3))
                 
                 # 점수 기준으로 정렬 (높은 순)
                 results_data.sort(key=lambda x: x['score'], reverse=True)
@@ -659,12 +724,8 @@ else:
                     
                     # 결과 표시
                     for idx, result in enumerate(dataset_results, 1):
-                        # rank와 total_docs 추가
-                        result['rank'] = idx
-                        result['total_docs'] = len(dataset_results)
-                        
-                        # 문서 선택 체크박스
-                        doc_id = f"{dataset_name}_{result['chapter']}_{result['article']}"
+                        # 문서 선택 체크박스 - 고유한 키 생성
+                        doc_id = f"{dataset_name}_{result['chapter']}_{result['article']}_{idx}"
                         
                         # 제목 형식 설정
                         if result.get('is_complex_format', False):
@@ -672,7 +733,6 @@ else:
                         elif result['title'] == 'null':
                             display_title = f"📄 {result['chapter']} - {result['article']} (관련도: {result['score']:.4f}, 순위: {idx}/{len(dataset_results)})"
                         else:
-                            # 제목 길이 제한
                             title = result['title']
                             if len(title) > 20:
                                 title = title[:17] + "..."
@@ -729,7 +789,7 @@ else:
                         'rating': st.session_state.feedback_rating,
                         'comment': st.session_state.feedback_comment,
                         'selected_documents': list(st.session_state.selected_documents),
-                        'all_outputs': response_data["data"]["outputs"]["output"]
+                        'all_outputs': [output1, output2, output3]
                     }
                     
                     if submit_feedback(user_name, feedback_data, response_data):
